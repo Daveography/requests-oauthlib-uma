@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - "**"
+    paths-ignore:
+      - .vscode/**
+      - README.md
+
+  pull_request:
+    branches:
+      - development
+
+  # Enable the workflow to be run manually
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      matrix:
+        python-version: [3.9, "3.10"]
+
+    steps:
+      - name: Git Checkout
+        uses: actions/checkout@v4
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: poetry
+
+      - name: Install Dependencies
+        run: poetry install --all-extras
+
+      - name: Lint with Flake8
+        run: poetry run flake8 .
+
+      - name: Test with pytest
+        run: poetry run pytest
