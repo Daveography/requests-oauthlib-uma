@@ -45,7 +45,7 @@ class UMA2Session(OAuth2Session):
         state: Optional[str] = None,
         token_updater: Optional[Callable[[dict[str, Any]], None]] = None,
         headers: Optional[dict[str, str]] = None,
-        uma_client_id: Optional[str] = None,
+        fetch_rpt_kwargs: Optional[dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -71,8 +71,8 @@ class UMA2Session(OAuth2Session):
                 when a token has been refreshed. This warning will carry the token in its token argument. Defaults to
                 None.
             headers (dict[str, str], optional): Default headers to include on all requests. Defaults to None.
-            uma_client_id (str, optional): The UMA Resource Server Client id, if different from the initial OAuth2
-                Client id. Defaults to None.
+            fetch_rpt_kwargs (dict[str, Any], optional): Extra arguments to pass to the RPT token endpoint. Defaults to
+                None.
             kwargs: Arguments to pass to the Session constructor.
         """
         super().__init__(
@@ -88,7 +88,7 @@ class UMA2Session(OAuth2Session):
             **kwargs,
         )
         self.headers = merge_setting(headers, self.headers, dict_class=CaseInsensitiveDict)
-        self.uma_client_id = uma_client_id
+        self.fetch_rpt_kwargs = fetch_rpt_kwargs or {}
 
     def request(
         self,
@@ -124,12 +124,8 @@ class UMA2Session(OAuth2Session):
 
             # Fetch a (new) Requesting Party Token (RPT)
             token_url = self._get_token_url(as_uri)
-            audience = self.uma_client_id or self.client_id
 
-            if audience is None:
-                raise ValueError("Either a uma_client_id or client_id must be provided")
-
-            self.fetch_token(token_url, auth=OAuth2(client=self._client), ticket=ticket, audience=audience)
+            self.fetch_token(token_url, auth=OAuth2(client=self._client), ticket=ticket, **self.fetch_rpt_kwargs)
 
             # Retry the original request
             response = super().request(

@@ -295,12 +295,11 @@ class UMA2SessionTest(TestCase):
             body = sess.send.mock_calls[2][1][0].body
             self.assertIn("ticket=auth-server-issued-ticket", body)
             self.assertIn("rpt=asdfoiw37850234lkjsdfsdf", body)
-            self.assertIn("audience=someclientid", body)
 
             # Ensure the session token is now the RPT
             self.assertEqual(sess.token["access_token"], "2YotnFZFEjr1zCsicMWpAA")
 
-    def test_fetch_token_should_include_uma_audience_when_provided(self):
+    def test_fetch_token_should_include_fetch_rpt_kwargs_when_provided(self):
         fake_unauthorized = mock.MagicMock(
             status_code=401,
             headers={
@@ -312,7 +311,7 @@ class UMA2SessionTest(TestCase):
         fake_final_response = mock.MagicMock(text="Success")
 
         for client in self.all_clients:
-            sess = UMA2Session(client=client, token=self.token, uma_client_id="someotherclientid")
+            sess = UMA2Session(client=client, token=self.token, fetch_rpt_kwargs={"audience": "someotherclientid"})
 
             # Ensure we start with the provided client
             self.assertIsInstance(sess._client, client.__class__)
