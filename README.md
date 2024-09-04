@@ -67,6 +67,28 @@ session = UMA2Session(
 )
 ```
 
+### Handling Sequential Flows
+
+By default, `UMA2Session` will only attempt a UMA flow once per request. If a Resource requires multiple UMA flows in order to grant authorization, you can increase the maximum number of attempts permitted per request: If the Resource is still requesting UMA authorization after reaching this limit, `requests_oauthlib_uma.exceptions.MaxUMAFlowsReachedError` is raised.
+
+```python
+from requests_oauthlib_uma.exceptions import MaxUMAFlowsReachedError
+
+session = UMA2Session(
+    client=LegacyApplicationClient(client_id=client_id),
+    max_flows_per_request=2,
+)
+
+try:
+    response = session.get("https://somesite.com/secure/resource")
+except MaxUMAFlowsReachedError as err:
+    print(f"Giving up after {err.last_attempt.attempt_number} UMA authorization attempts.")
+
+    # Get the last response before the session gave up
+    last_response = err.last_attempt.result()
+    print(f"Last response was {last_response.status_code} - {last_response.text}")
+```
+
 ### Default Headers
 
 You can also configure the Session to always provide a set of default headers that will be provided with all requests:

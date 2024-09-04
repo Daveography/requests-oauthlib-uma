@@ -10,6 +10,7 @@ packages = [{include = "requests_oauthlib_uma"}]
 python = "^3.9"
 requests-oauthlib = "^2.0.0"
 typing-extensions = "^4.12.2"
+tenacity = "^9.0.0"
 
 [tool.poetry.group.dev.dependencies]
 flake8 = "^6.0.0"

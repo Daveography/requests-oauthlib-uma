@@ -3,15 +3,25 @@ import re
 
 from oauthlib.oauth2 import Client
 from requests import Response, codes
-from requests import exceptions as error
+from requests.exceptions import InvalidHeader
 from requests.sessions import merge_setting
 from requests.structures import CaseInsensitiveDict
 from requests_oauthlib import OAuth2, OAuth2Session
+from tenacity import Retrying, retry_if_result, stop_after_attempt
 from typing_extensions import Any, Callable, Optional
 
+from .exceptions import MaxUMAFlowsReachedError
 from .uma2_client import UMA2Client
 
 log = logging.getLogger(__name__)
+
+
+def _is_uma_unauthorized(response: Response) -> bool:
+    return (
+        response.status_code == codes.unauthorized
+        and "WWW-Authenticate" in response.headers
+        and response.headers["WWW-Authenticate"].startswith("UMA")
+    )
 
 
 class UMA2Session(OAuth2Session):
@@ -46,6 +56,7 @@ class UMA2Session(OAuth2Session):
         token_updater: Optional[Callable[[dict[str, Any]], None]] = None,
         headers: Optional[dict[str, str]] = None,
         fetch_rpt_kwargs: Optional[dict[str, Any]] = None,
+        max_flows_per_request: int = 1,
         **kwargs,
     ):
         """
@@ -73,8 +84,17 @@ class UMA2Session(OAuth2Session):
             headers (dict[str, str], optional): Default headers to include on all requests. Defaults to None.
             fetch_rpt_kwargs (dict[str, Any], optional): Extra arguments to pass to the RPT token endpoint. Defaults to
                 None.
+            max_flows_per_request (int, optional): Maximum number of sequential UMA flows to attempt per request; e.g.,
+                if a Resource requires multiple permission assessments before authorization can be granted. Raises
+                :class:`requests_oauthlib_uma.exceptions.MaxUMAFlowsReachedError` if the Resource is still requesting
+                UMA authorization after reaching this limit (i.e., to prevent infinite loops). Defaults to 1.
             kwargs: Arguments to pass to the Session constructor.
+
+        Raises:
+            :class:`requests_oauthlib_uma.exceptions.MaxUMAFlowsReachedError`: If the Resource Server is still
+                requesting UMA authorization after reaching the configured limit.
         """
+
         super().__init__(
             client_id,
             client,
@@ -87,8 +107,10 @@ class UMA2Session(OAuth2Session):
             token_updater,
             **kwargs,
         )
+
         self.headers = merge_setting(headers, self.headers, dict_class=CaseInsensitiveDict)
         self.fetch_rpt_kwargs = fetch_rpt_kwargs or {}
+        self.max_flows_per_request = max_flows_per_request
 
     def request(
         self,
@@ -102,37 +124,44 @@ class UMA2Session(OAuth2Session):
         files=None,
         **kwargs,
     ) -> Response:
-        # Try the request as usual
         response = super().request(
             method, url, data, headers, withhold_token, client_id, client_secret, files, **kwargs
         )
 
-        # Intercept and handle UMA Unauthorized response
+        if _is_uma_unauthorized(response):
+            # Intercept and handle UMA Unauthorized responses up to configured retry limit
+            for attempt in Retrying(
+                retry=retry_if_result(_is_uma_unauthorized),
+                stop=stop_after_attempt(self.max_flows_per_request),
+                reraise=True,
+                retry_error_cls=MaxUMAFlowsReachedError,
+            ):
+                with attempt:
+                    _, ticket, as_uri = self._get_uma_params(response)
+
+                    if not isinstance(self._client, UMA2Client):
+                        # Replace client with UMA client from here on
+                        if self.client_id is None:
+                            raise ValueError("client_id must be provided")
+
+                        self._client = UMA2Client(self.client_id, token=self.token)
+
+                    # Fetch a (new) Requesting Party Token (RPT)
+                    token_url = self._get_token_url(as_uri)
+
+                    self.fetch_token(
+                        token_url, auth=OAuth2(client=self._client), ticket=ticket, **self.fetch_rpt_kwargs
+                    )
+
+                    # Retry the request
+                    response = super().request(
+                        method, url, data, headers, withhold_token, client_id, client_secret, files, **kwargs
+                    )
+
+                if not attempt.retry_state.outcome.failed:  # type: ignore
+                    attempt.retry_state.set_result(response)
+
         if (
-            response.status_code == codes.unauthorized
-            and "WWW-Authenticate" in response.headers
-            and response.headers["WWW-Authenticate"].startswith("UMA")
-        ):
-            _, ticket, as_uri = self._get_uma_params(response)
-
-            if not isinstance(self._client, UMA2Client):
-                # Replace client with UMA client from here on
-                if self.client_id is None:
-                    raise ValueError("client_id must be provided")
-
-                self._client = UMA2Client(self.client_id, token=self.token)
-
-            # Fetch a (new) Requesting Party Token (RPT)
-            token_url = self._get_token_url(as_uri)
-
-            self.fetch_token(token_url, auth=OAuth2(client=self._client), ticket=ticket, **self.fetch_rpt_kwargs)
-
-            # Retry the original request
-            response = super().request(
-                method, url, data, headers, withhold_token, client_id, client_secret, files, **kwargs
-            )
-
-        elif (
             response.status_code == codes.forbidden
             and "Warning" in response.headers
             and response.headers["Warning"].startswith("199")
@@ -147,7 +176,7 @@ class UMA2Session(OAuth2Session):
 
         if matches is None:
             # TODO: What is the correct exception to raise here?
-            raise error.InvalidHeader(
+            raise InvalidHeader(
                 f"Received invalid UMA WWW-Authenticate header from resource server: "
                 f'{response.headers["WWW-Authenticate"]};'
                 'expected format: UMA realm="<realm>", ticket="<ticket>", as_uri="<as_uri>"',

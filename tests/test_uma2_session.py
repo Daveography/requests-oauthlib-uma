@@ -10,12 +10,29 @@ from oauthlib.oauth2 import (
     TokenExpiredError,
     WebApplicationClient,
 )
-from requests.exceptions import InvalidHeader
+from requests.exceptions import InvalidHeader, HTTPError
 from requests_oauthlib import TokenUpdated
 
 from requests_oauthlib_uma import UMA2Client, UMA2Session
+from requests_oauthlib_uma.exceptions import MaxUMAFlowsReachedError
 
 fake_time = time.time()
+
+fake_uma_unauthorized = mock.MagicMock(
+    status_code=401,
+    headers={
+        "WWW-Authenticate": 'UMA realm="example", as_uri="https://as.example.com", ticket="auth-server-issued-ticket"'
+    },
+)
+fake_well_known = mock.MagicMock(status_code=200, json=lambda: {"token_endpoint": "https://as.example.com/realm/token"})
+fake_rpt_token = mock.MagicMock(status_code=201, text='{"access_token": "2YotnFZFEjr1zCsicMWpAA"}')
+fake_final_response = mock.MagicMock(status_code=200, text="Success")
+
+fake_basic_unauthorized = mock.MagicMock(
+    status_code=401,
+    headers={"WWW-Authenticate": 'Basic realm="example"'},
+    text="Unauthorized",
+)
 
 
 class UMA2SessionTest(TestCase):
@@ -141,14 +158,8 @@ class UMA2SessionTest(TestCase):
             sess.get("https://i.b", client_id=self.client_id, client_secret=self.client_secret)  # type: ignore
 
     def test_should_parse_uma_authenticate_header(self):
-        uma_unauthorized_response = mock.MagicMock(
-            status_code=401,
-            headers={
-                "WWW-Authenticate": 'UMA realm="example", as_uri="https://as.example.com", ticket="auth-server-issued-ticket"'  # noqa E501
-            },
-        )
         sess = UMA2Session(client=mock.MagicMock())
-        realm, ticket, as_uri = sess._get_uma_params(uma_unauthorized_response)
+        realm, ticket, as_uri = sess._get_uma_params(fake_uma_unauthorized)
         self.assertEqual(realm, "example")
         self.assertEqual(ticket, "auth-server-issued-ticket")
         self.assertEqual(as_uri, "https://as.example.com")
@@ -193,13 +204,9 @@ class UMA2SessionTest(TestCase):
         self.assertEqual(as_uri, "https://as.example.com")
 
     def test_should_raise_if_not_uma_authenticate_header(self):
-        basic_unauthorized_response = mock.MagicMock(
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="example"'},
-        )
         sess = UMA2Session(client=mock.MagicMock())
         with self.assertRaises(InvalidHeader):
-            sess._get_uma_params(basic_unauthorized_response)
+            sess._get_uma_params(fake_basic_unauthorized)
 
     def test_should_raise_if_uma_authenticate_header_missing_realm(self):
         incomplete_uma_unauthorized_response = mock.MagicMock(
@@ -260,16 +267,6 @@ class UMA2SessionTest(TestCase):
         sess._get_token_url("https://as.example.com/realm/")
 
     def test_uma_unauthorized_request_should_trigger_workflow(self):
-        fake_unauthorized = mock.MagicMock(
-            status_code=401,
-            headers={
-                "WWW-Authenticate": 'UMA realm="example", as_uri="https://as.example.com", ticket="auth-server-issued-ticket"'  # noqa E501
-            },
-        )
-        fake_well_known = mock.MagicMock(json=lambda: {"token_endpoint": "https://as.example.com/realm/token"})
-        fake_rpt_token = mock.MagicMock(text='{"access_token": "2YotnFZFEjr1zCsicMWpAA"}')
-        fake_final_response = mock.MagicMock(text="Success")
-
         for client in self.all_clients:
             sess = UMA2Session(client=client, token=self.token)
 
@@ -278,7 +275,7 @@ class UMA2SessionTest(TestCase):
 
             sess.send = mock.MagicMock(
                 side_effect=[
-                    fake_unauthorized,
+                    fake_uma_unauthorized,
                     fake_well_known,
                     fake_rpt_token,
                     fake_final_response,
@@ -286,6 +283,7 @@ class UMA2SessionTest(TestCase):
             )
 
             resp = sess.get("https://i.b")
+            self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.text, "Success")
 
             # Ensure the client was replaced with UMA2Client
@@ -298,6 +296,132 @@ class UMA2SessionTest(TestCase):
 
             # Ensure the session token is now the RPT
             self.assertEqual(sess.token["access_token"], "2YotnFZFEjr1zCsicMWpAA")
+
+    def test_should_handle_up_to_configured_max_sequential_uma_flows(self):
+        for client in self.all_clients:
+            sess = UMA2Session(client=client, token=self.token, max_flows_per_request=2)
+            sess.send = mock.MagicMock(
+                side_effect=[
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_final_response,
+                ]
+            )
+
+            resp = sess.get("https://i.b")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.text, "Success")
+            self.assertEqual(7, sess.send.call_count)
+
+    def test_should_raise_after_configured_max_sequential_uma_flows(self):
+        fake_uma_unauthorized_final = mock.MagicMock(
+            status_code=401,
+            text="Unauthorized",
+            headers={
+                "WWW-Authenticate": 'UMA realm="example", as_uri="https://as.example.com", ticket="auth-server-issued-ticket"'  # noqa E501
+            },
+        )
+
+        for client in self.all_clients:
+            sess = UMA2Session(client=client, token=self.token, max_flows_per_request=2)
+            sess.send = mock.MagicMock(
+                side_effect=[
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_uma_unauthorized_final,
+                ]
+            )
+
+            with self.assertRaises(MaxUMAFlowsReachedError):
+                sess.get("https://i.b")
+
+            self.assertEqual(7, sess.send.call_count)
+
+    def test_should_raise_normally_if_unexpected_error_raised(self):
+        for client in self.all_clients:
+            sess = UMA2Session(client=client, token=self.token, max_flows_per_request=2)
+            sess.send = mock.MagicMock(
+                side_effect=[
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_uma_unauthorized,
+                    HTTPError("Unexpected error"),
+                ]
+            )
+
+            with self.assertRaises(HTTPError) as err:
+                sess.get("https://i.b")
+
+            self.assertEqual(5, sess.send.call_count)
+            self.assertEqual("Unexpected error", str(err.exception))
+
+    def test_raised_error_should_contain_last_response(self):
+        fake_uma_unauthorized_final = mock.MagicMock(
+            status_code=401,
+            text="Unauthorized",
+            headers={
+                "WWW-Authenticate": 'UMA realm="example", as_uri="https://as.example.com", ticket="auth-server-issued-ticket"'  # noqa E501
+            },
+        )
+
+        for client in self.all_clients:
+            sess = UMA2Session(client=client, token=self.token, max_flows_per_request=2)
+            sess.send = mock.MagicMock(
+                side_effect=[
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_uma_unauthorized,
+                    fake_well_known,
+                    fake_rpt_token,
+                    fake_uma_unauthorized_final,
+                ]
+            )
+
+            with self.assertRaises(MaxUMAFlowsReachedError) as err:
+                sess.get("https://i.b")
+
+            self.assertEqual(err.exception.last_attempt.attempt_number, 3)
+
+            last_resp = err.exception.last_attempt.result()
+            self.assertEqual(last_resp.status_code, 401)
+            self.assertEqual(last_resp.text, "Unauthorized")
+
+    def test_should_not_retry_on_other_response_types(self):
+        fake_forbidden = mock.MagicMock(status_code=403, text="Forbidden")
+        fake_server_error = mock.MagicMock(status_code=500, text="Server Error")
+
+        for client in self.all_clients:
+            sess = UMA2Session(client=client, token=self.token, max_flows_per_request=2)
+            sess.send = mock.MagicMock(side_effect=[fake_basic_unauthorized])
+
+            resp = sess.get("https://i.b")
+            self.assertEqual(resp.status_code, 401)
+            self.assertEqual(resp.text, "Unauthorized")
+            self.assertEqual(1, sess.send.call_count)
+
+            sess.send = mock.MagicMock(side_effect=[fake_forbidden])
+
+            resp = sess.get("https://i.b")
+            self.assertEqual(resp.status_code, 403)
+            self.assertEqual(resp.text, "Forbidden")
+            self.assertEqual(1, sess.send.call_count)
+
+            sess.send = mock.MagicMock(side_effect=[fake_server_error])
+
+            resp = sess.get("https://i.b")
+            self.assertEqual(resp.status_code, 500)
+            self.assertEqual(resp.text, "Server Error")
+            self.assertEqual(1, sess.send.call_count)
 
     def test_fetch_token_should_include_fetch_rpt_kwargs_when_provided(self):
         fake_unauthorized = mock.MagicMock(
