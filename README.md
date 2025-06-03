@@ -107,7 +107,7 @@ session = UMA2Session(
 This package utilizes [Poetry](https://python-poetry.org) for dependency management and [pre-commit](https://pre-commit.com/) for ensuring code formatting is automatically done and code style checks are performed.
 
 ```bash
-git clone https://github.com/alpha-layer/requests-oauthlib-uma.git requests-oauthlib-uma
+git clone https://github.com/Daveography/requests-oauthlib-uma.git requests-oauthlib-uma
 cd requests-oauthlib-uma
 pip install poetry
 poetry install
