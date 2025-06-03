@@ -10,7 +10,7 @@ from oauthlib.oauth2 import (
     TokenExpiredError,
     WebApplicationClient,
 )
-from requests.exceptions import InvalidHeader, HTTPError
+from requests.exceptions import HTTPError, InvalidHeader
 from requests_oauthlib import TokenUpdated
 
 from requests_oauthlib_uma import UMA2Client, UMA2Session

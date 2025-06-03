@@ -8,11 +8,12 @@ See [User-Managed Access (UMA) 2.0 Grant for OAuth 2.0 Authorization](https://do
 
 **NOTE:** This project is not affiliated with [Requests-OAuthlib](https://github.com/requests/requests-oauthlib) or any of its dependent libraries.
 
+
 ## Install
 ```bash
-poetry source add --priority=supplemental alphalayer https://pkgs.dev.azure.com/alphalayerai/Packages/_packaging/Python/pypi/simple/
-poetry add --source alphalayer requests-oauthlib-uma
+pip install requests-oauthlib-uma
 ```
+
 
 ## Example
 
@@ -100,18 +101,14 @@ session = UMA2Session(
 )
 ```
 
+
 ## Contributing
 
 This package utilizes [Poetry](https://python-poetry.org) for dependency management and [pre-commit](https://pre-commit.com/) for ensuring code formatting is automatically done and code style checks are performed.
 
-You'll also want to set up and use `pyenv` to manage Python versions. See [Managing Multiple Python Versions With pyenv](https://realpython.com/intro-to-pyenv/) for an introduction to pyenv. Download and install for [Linux & Mac](https://github.com/pyenv/pyenv) or [Windows](https://github.com/pyenv-win/pyenv-win).
-
 ```bash
 git clone https://github.com/alpha-layer/requests-oauthlib-uma.git requests-oauthlib-uma
 cd requests-oauthlib-uma
-pyenv update
-pyenv install 3.9.13
-pyenv local 3.9.13
 pip install poetry
 poetry install
 poetry run pre-commit install

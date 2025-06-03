@@ -7,16 +7,17 @@ on:
 
 jobs:
   publish:
+    environment: pypi
+
     permissions:
-      contents: read
-      id-token: write # Required to use OIDC token authentication
+      id-token: write
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     strategy:
       matrix:
-        python-version: [3.9]
+        python-version: [3.9, "3.10", 3.11, 3.12, 3.13]
 
     steps:
       - name: Git Checkout
@@ -33,20 +34,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: poetry
 
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Set ADO Token for Private Package Feed
-        run: |
-          TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query "accessToken" --output tsv)
-          poetry config http-basic.alphalayer-publish __token__ $TOKEN
-
-      - name: Build and publish
+      - name: Build
         run: |
           poetry version ${{ github.ref_name }}
           poetry build
-          poetry publish --repository alphalayer-publish
+      
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

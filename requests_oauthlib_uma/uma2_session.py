@@ -1,5 +1,5 @@
-import logging
 import re
+from typing_extensions import Any, Callable, Optional
 
 from oauthlib.oauth2 import Client
 from requests import Response, codes
@@ -8,12 +8,9 @@ from requests.sessions import merge_setting
 from requests.structures import CaseInsensitiveDict
 from requests_oauthlib import OAuth2, OAuth2Session
 from tenacity import Retrying, retry_if_result, stop_after_attempt
-from typing_extensions import Any, Callable, Optional
 
 from .exceptions import MaxUMAFlowsReachedError
 from .uma2_client import UMA2Client
-
-log = logging.getLogger(__name__)
 
 
 def _is_uma_unauthorized(response: Response) -> bool:

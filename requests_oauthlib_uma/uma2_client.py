@@ -1,10 +1,7 @@
-import logging
+from typing_extensions import Any
 
 from oauthlib.oauth2 import Client
 from oauthlib.oauth2.rfc6749.parameters import prepare_token_request
-from typing_extensions import Any
-
-log = logging.getLogger(__name__)
 
 
 class UMA2Client(Client):
